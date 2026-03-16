@@ -195,6 +195,8 @@ for order in orders:
     print(order.id, order.order_type, order.quantity)  # list items use .id
 ```
 
+**Pagination:** List endpoints (e.g. `get_orders`, `get_order_history`, `get_positions`) return the data array as sent by the API. Some endpoints may not include pagination metadata (e.g. `total_count`, `has_more`). When metadata is not available, paginate by using the **`limit`** and **`offset`** parameters yourself (e.g. `get_order_history(limit=20, offset=0)`, then `offset=20` for the next page).
+
 ```python
 # Methods that return a simple success flag (e.g. close_position_partial) wrap it in .result
 resp = client.close_position_partial(position_id="...", quantity="0.001", order_type="SHORT")
