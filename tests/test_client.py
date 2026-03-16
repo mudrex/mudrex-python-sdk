@@ -67,13 +67,21 @@ class TestClientInit(unittest.TestCase):
         self.assertEqual(c._trade_currency, "USDT")
 
     @patch.object(TradeClient, "_ping")
-    def test_custom_trade_currency(self, _):
-        c = TradeClient(api_secret="s", trade_currency="INR")
-        self.assertEqual(c._trade_currency, "INR")
+    def test_non_usdt_trade_currency_raises(self, _):
+        with self.assertRaises(ValueError) as ctx:
+            TradeClient(api_secret="s", trade_currency="INR")
+        self.assertIn("Only USDT", str(ctx.exception))
 
     @patch.object(TradeClient, "_ping")
     def test_ping_called_on_init(self, mock_ping):
         TradeClient(api_secret="s")
+        mock_ping.assert_called_once()
+
+    @patch.object(TradeClient, "_ping")
+    def test_ping_can_be_called_anytime(self, mock_ping):
+        client = TradeClient(api_secret="s")
+        mock_ping.reset_mock()
+        client.ping()
         mock_ping.assert_called_once()
 
 
@@ -183,19 +191,19 @@ class TestGetLeverage(_ClientTestBase):
 class TestSetLeverage(_ClientTestBase):
 
     def test_basic(self):
-        self.client.set_leverage("BTCUSDT", leverage=20)
+        self.client.set_leverage("BTCUSDT", leverage="20")
         self._assert_called_with(
             "POST", "/futures/BTCUSDT/leverage",
             params={"is_symbol": "true"},
             body={
-                "leverage": 20,
+                "leverage": "20",
                 "margin_type": "ISOLATED",
                 "trade_currency": "USDT",
             },
         )
 
     def test_custom_margin_type(self):
-        self.client.set_leverage("BTCUSDT", leverage=5, margin_type="CROSS")
+        self.client.set_leverage("BTCUSDT", leverage="5", margin_type="CROSS")
         kwargs = self.mock_request.call_args[1]
         self.assertEqual(kwargs["json"]["margin_type"], "CROSS")
 
@@ -210,7 +218,7 @@ class TestPlaceOrder(_ClientTestBase):
     def test_market_order(self):
         self.client.place_order(
             "BTCUSDT",
-            leverage=10,
+            leverage="10",
             quantity="0.001",
             order_type="LONG",
             trigger_type="MARKET",
@@ -219,7 +227,7 @@ class TestPlaceOrder(_ClientTestBase):
             "POST", "/futures/BTCUSDT/order",
             params={"is_symbol": "true"},
             body={
-                "leverage": 10,
+                "leverage": "10",
                 "quantity": "0.001",
                 "order_type": "LONG",
                 "trigger_type": "MARKET",
@@ -233,7 +241,7 @@ class TestPlaceOrder(_ClientTestBase):
     def test_limit_order_with_sl_tp(self):
         self.client.place_order(
             "ETHUSDT",
-            leverage=5,
+            leverage="5",
             quantity="0.1",
             order_type="SHORT",
             trigger_type="LIMIT",
@@ -254,7 +262,7 @@ class TestPlaceOrder(_ClientTestBase):
     def test_by_asset_id(self):
         self.client.place_order(
             asset_id="uuid-btc",
-            leverage=10,
+            leverage="10",
             quantity="0.001",
             order_type="LONG",
             trigger_type="MARKET",
@@ -266,7 +274,7 @@ class TestPlaceOrder(_ClientTestBase):
     def test_reduce_only(self):
         self.client.place_order(
             "BTCUSDT",
-            leverage=10,
+            leverage="10",
             quantity="0.001",
             order_type="SHORT",
             trigger_type="MARKET",
@@ -275,19 +283,17 @@ class TestPlaceOrder(_ClientTestBase):
         kwargs = self.mock_request.call_args[1]
         self.assertTrue(kwargs["json"]["reduce_only"])
 
-    def test_inr_client(self):
-        with patch.object(TradeClient, "_ping"):
-            client = TradeClient(api_secret="s", trade_currency="INR")
-        with patch.object(client._session, "request", self.mock_request):
-            client.place_order(
-                "BTCUSDT",
-                leverage=10,
-                quantity="0.001",
-                order_type="LONG",
-                trigger_type="MARKET",
-            )
+    def test_client_sends_usdt(self):
+        """Client sends default trade_currency USDT in order body."""
+        self.client.place_order(
+            "BTCUSDT",
+            leverage="10",
+            quantity="0.001",
+            order_type="LONG",
+            trigger_type="MARKET",
+        )
         kwargs = self.mock_request.call_args[1]
-        self.assertEqual(kwargs["json"]["trade_currency"], "INR")
+        self.assertEqual(kwargs["json"]["trade_currency"], "USDT")
 
 
 class TestGetOrders(_ClientTestBase):
@@ -508,10 +514,10 @@ class TestAddMargin(_ClientTestBase):
             body={"margin": "50"},
         )
 
-    def test_numeric_margin(self):
-        self.client.add_margin("pid-1", margin=100)
+    def test_margin_as_string(self):
+        self.client.add_margin("pid-1", margin="100")
         kwargs = self.mock_request.call_args[1]
-        self.assertEqual(kwargs["json"]["margin"], 100)
+        self.assertEqual(kwargs["json"]["margin"], "100")
 
 
 class TestGetLiquidationPrice(_ClientTestBase):
@@ -523,7 +529,8 @@ class TestGetLiquidationPrice(_ClientTestBase):
             "GET", "/futures/positions/pid-1/liq-price",
             params={"trade_currency": "USDT"},
         )
-        self.assertEqual(result, "62888.3")
+        self.assertIsInstance(result, MudrexResponse)
+        self.assertEqual(result.result, "62888.3")
 
     def test_with_ext_margin(self):
         self._set_response(SUCCESS_SCALAR)
@@ -584,12 +591,12 @@ class TestTransfer(_ClientTestBase):
         )
 
     def test_futures_to_hedge(self):
-        self.client.transfer("FUTURES", "HEDGE", 50.5)
+        self.client.transfer("FUTURES", "HEDGE", "50.5")
         kwargs = self.mock_request.call_args[1]
         body = kwargs["json"]
         self.assertEqual(body["from_wallet_type"], "FUTURES")
         self.assertEqual(body["to_wallet_type"], "HEDGE")
-        self.assertEqual(body["amount"], 50.5)
+        self.assertEqual(body["amount"], "50.5")  # float normalized to str for precision
 
 
 # ═══════════════════════════════════════════════════
@@ -605,25 +612,18 @@ class TestTradeCurrencyLock(_ClientTestBase):
         kwargs = self.mock_request.call_args[1]
         self.assertEqual(kwargs["params"]["trade_currency"], "USDT")
 
-    def test_inr_client_sends_inr(self):
+    def test_non_usdt_raises(self):
         with patch.object(TradeClient, "_ping"):
-            inr_client = TradeClient(api_secret="s", trade_currency="INR")
-        with patch.object(inr_client._session, "request", self.mock_request):
-            self._set_response(SUCCESS_LIST)
-            inr_client.get_orders()
-        kwargs = self.mock_request.call_args[1]
-        self.assertEqual(kwargs["params"]["trade_currency"], "INR")
+            with self.assertRaises(ValueError):
+                TradeClient(api_secret="s", trade_currency="INR")
 
     def test_all_currency_endpoints_use_client_currency(self):
-        """Every method that sends trade_currency should use the client's value."""
-        with patch.object(TradeClient, "_ping"):
-            inr_client = TradeClient(api_secret="s", trade_currency="INR")
-
+        """Every method that sends trade_currency should use the client's value (USDT)."""
         methods = [
             lambda c: c.get_available_funds(),
             lambda c: c.get_leverage("BTCUSDT"),
-            lambda c: c.set_leverage("BTCUSDT", leverage=10),
-            lambda c: c.place_order("BTCUSDT", leverage=10, quantity="0.001",
+            lambda c: c.set_leverage("BTCUSDT", leverage="10"),
+            lambda c: c.place_order("BTCUSDT", leverage="10", quantity="0.001",
                                     order_type="LONG", trigger_type="MARKET"),
             lambda c: c.get_orders(),
             lambda c: c.get_order_history(),
@@ -635,14 +635,13 @@ class TestTradeCurrencyLock(_ClientTestBase):
 
         for method_fn in methods:
             self.mock_request.reset_mock()
-            with patch.object(inr_client._session, "request", self.mock_request):
-                method_fn(inr_client)
+            method_fn(self.client)
             kwargs = self.mock_request.call_args[1]
             sent_tc = (kwargs.get("params") or {}).get("trade_currency") or \
                       (kwargs.get("json") or {}).get("trade_currency")
             self.assertEqual(
-                sent_tc, "INR",
-                f"Expected INR but got {sent_tc} for {kwargs['url']}"
+                sent_tc, "USDT",
+                f"Expected USDT but got {sent_tc} for {kwargs['url']}"
             )
 
 

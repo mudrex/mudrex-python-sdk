@@ -3,7 +3,6 @@
 import json
 import os
 import unittest
-from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
 import requests
@@ -93,23 +92,16 @@ class TestPrepareBody(unittest.TestCase):
         result = _HTTPClient._prepare_body({"a": 1, "b": None})
         self.assertEqual(result, {"a": 1})
 
-    def test_converts_decimal_to_str(self):
-        result = _HTTPClient._prepare_body({"price": Decimal("123.456")})
-        self.assertEqual(result, {"price": "123.456"})
-        self.assertIsInstance(result["price"], str)
-
-    def test_preserves_other_types(self):
+    def test_preserves_all_types(self):
         result = _HTTPClient._prepare_body({
             "qty": "0.001",
             "lev": 10,
             "flag": True,
-            "rate": 0.5,
         })
         self.assertEqual(result, {
             "qty": "0.001",
             "lev": 10,
             "flag": True,
-            "rate": 0.5,
         })
 
     def test_keeps_false_values(self):
@@ -138,15 +130,17 @@ class TestHandleResponse(unittest.TestCase):
         self.assertEqual(len(result), 2)
         self.assertIsInstance(result[0], MudrexResponse)
 
-    def test_success_scalar(self):
+    def test_success_scalar_wrapped_in_response(self):
         resp = _make_response(200, {"success": True, "data": "62888.3"})
         result = _HTTPClient._handle_response(resp)
-        self.assertEqual(result, "62888.3")
+        self.assertIsInstance(result, MudrexResponse)
+        self.assertEqual(result.result, "62888.3")
 
-    def test_success_none_data(self):
+    def test_success_none_data_wrapped_in_response(self):
         resp = _make_response(200, {"success": True, "data": None})
         result = _HTTPClient._handle_response(resp)
-        self.assertIsNone(result)
+        self.assertIsInstance(result, MudrexResponse)
+        self.assertIsNone(result.result)
 
     def test_api_error_with_errors_array(self):
         resp = _make_response(400, {
@@ -197,6 +191,51 @@ class TestHandleResponse(unittest.TestCase):
         self.assertEqual(result[0], "abc")
         self.assertEqual(result[1], 123)
         self.assertIsInstance(result[2], MudrexResponse)
+
+    def test_empty_body_204_returns_none(self):
+        resp = MagicMock(spec=requests.Response)
+        resp.status_code = 204
+        resp.text = ""
+        result = _HTTPClient._handle_response(resp)
+        self.assertIsNone(result)
+
+    def test_empty_body_429_raises_rate_limit_message(self):
+        resp = MagicMock(spec=requests.Response)
+        resp.status_code = 429
+        resp.text = ""
+        with self.assertRaises(MudrexAPIError) as ctx:
+            _HTTPClient._handle_response(resp)
+        self.assertEqual(ctx.exception.code, 429)
+        self.assertEqual(ctx.exception.message, "API rate limit exceeded")
+
+    def test_empty_body_500_raises_empty_response_message(self):
+        resp = MagicMock(spec=requests.Response)
+        resp.status_code = 500
+        resp.text = ""
+        with self.assertRaises(MudrexAPIError) as ctx:
+            _HTTPClient._handle_response(resp)
+        self.assertEqual(ctx.exception.code, 500)
+        self.assertIn("Empty response body", ctx.exception.message)
+
+    def test_429_malformed_body_raises_rate_limit_message(self):
+        resp = MagicMock(spec=requests.Response)
+        resp.status_code = 429
+        resp.text = "not valid json"
+        resp.json.side_effect = json.JSONDecodeError("Expecting value", "", 0)
+        with self.assertRaises(MudrexAPIError) as ctx:
+            _HTTPClient._handle_response(resp)
+        self.assertEqual(ctx.exception.code, 429)
+        self.assertEqual(ctx.exception.message, "API rate limit exceeded")
+
+    def test_double_encoded_error_message_parsed(self):
+        resp = _make_response(429, {
+            "success": False,
+            "message": '{"errors":[{"code":5002,"text":"API rate limit exceeded"}]}',
+        })
+        with self.assertRaises(MudrexAPIError) as ctx:
+            _HTTPClient._handle_response(resp)
+        self.assertEqual(ctx.exception.code, 5002)
+        self.assertEqual(ctx.exception.message, "API rate limit exceeded")
 
 
 class TestNetworkRetries(unittest.TestCase):

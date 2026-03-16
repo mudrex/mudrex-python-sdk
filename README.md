@@ -45,6 +45,12 @@ except MudrexAPIError as e:
     print(e)  # [401] Invalid Authentication
 ```
 
+You can also ping anytime to verify connectivity and credentials:
+
+```python
+client.ping()  # no return value; raises on failure
+```
+
 You can also set the API secret via environment variable:
 
 ```bash
@@ -60,14 +66,22 @@ client = TradeClient()  # picks up MUDREX_API_SECRET automatically
 ```python
 client = TradeClient(
     api_secret="...",
-    trade_currency="USDT",  # locked for this client's lifetime
-    timeout=15,              # request timeout in seconds
+    trade_currency="USDT",  # only USDT supported; this is the default
+    timeout=10,              # request timeout in seconds
     max_retries=3,           # retries on network errors only
     log_requests=True,       # enable debug logging
 )
 ```
 
+**Numeric parameters** (quantity, leverage, prices, amount, margin, etc.) accept `str`, `int`, or `float`. The SDK does not convert types. The API expects string values for precision — **pass strings** (e.g. `quantity="0.001"`, `leverage="10"`) to avoid precision issues.
+
 ## API Reference
+
+### Client
+
+| Method | Description |
+|---|---|
+| `ping()` | Verify connectivity and API secret; raises on failure |
 
 ### Futures / Assets
 
@@ -82,13 +96,13 @@ client = TradeClient(
 | Method | Description |
 |---|---|
 | `get_leverage("BTCUSDT")` | Get current leverage and margin type |
-| `set_leverage("BTCUSDT", leverage=10)` | Set leverage for an asset |
+| `set_leverage("BTCUSDT", leverage="10")` | Set leverage for an asset |
 
 ### Orders
 
 | Method | Description |
 |---|---|
-| `place_order("BTCUSDT", leverage=10, quantity="0.001", order_type="LONG", trigger_type="MARKET")` | Place a new order |
+| `place_order("BTCUSDT", leverage="10", quantity="0.001", order_type="LONG", trigger_type="MARKET")` | Place a new order |
 | `get_orders(limit=20)` | Get open orders |
 | `get_order(order_id)` | Get a single order |
 | `get_order_history(limit=20)` | Get order history |
@@ -133,11 +147,12 @@ client.get_leverage(asset_id="550e8400-e29b-...")   # by UUID
 
 ## Trade Currency
 
-Trade currency is locked at client creation — every request from that client uses the same currency. This prevents accidental currency mismatches between orders, positions, and fund queries.
+Only **USDT** is supported as trade currency. The client defaults to `trade_currency="USDT"`, so you can omit it:
 
 ```python
-usdt_client = TradeClient(api_secret="...", trade_currency="USDT")
-inr_client  = TradeClient(api_secret="...", trade_currency="INR")
+client = TradeClient(api_secret="...")  # uses USDT by default
+# or explicitly:
+client = TradeClient(api_secret="...", trade_currency="USDT")
 ```
 
 ## Error Handling
@@ -148,7 +163,7 @@ from mudrex import TradeClient, MudrexAPIError, MudrexRequestError
 client = TradeClient(api_secret="...")
 
 try:
-    client.place_order("BTCUSDT", leverage=10, quantity="0.001",
+    client.place_order("BTCUSDT", leverage="10", quantity="0.001",
                        order_type="LONG", trigger_type="MARKET")
 except MudrexAPIError as e:
     print(f"API error [{e.code}]: {e.message}")
@@ -161,26 +176,76 @@ except MudrexRequestError as e:
 
 ## Response Format
 
-All methods return a `MudrexResponse` (a dict with attribute access):
+All methods return a `MudrexResponse` (a dict with attribute access) or a list of them. The API returns **numeric fields as strings** (e.g. `quantity`, `leverage`, `entry_price`, `pnl`) to preserve precision; the SDK passes these through unchanged.
+
+- **Object responses** (e.g. `place_order`, `get_leverage`): one `MudrexResponse` with the API fields.
+- **List responses** (e.g. `get_orders`, `get_positions`, `get_position_history`): a list of `MudrexResponse` objects.
+- **Scalar responses** (e.g. `close_position_partial` when the API returns `{"success": true, "data": true}`): a single `MudrexResponse` with a `result` field holding the value (e.g. `resp.result` is `True`).
 
 ```python
 resp = client.get_leverage("BTCUSDT")
 print(resp["leverage"])   # dict style
-print(resp.leverage)      # attribute style
-print(resp.margin_type)   # "ISOLATED"
+print(resp.leverage)     # attribute style (string, e.g. "10")
+print(resp.margin_type)  # "ISOLATED"
 ```
-
-List endpoints return a list of `MudrexResponse` objects:
 
 ```python
 orders = client.get_orders()
 for order in orders:
-    print(order.order_id, order.order_type, order.quantity)
+    print(order.id, order.order_type, order.quantity)  # list items use .id
+```
+
+```python
+# Methods that return a simple success flag (e.g. close_position_partial) wrap it in .result
+resp = client.close_position_partial(position_id="...", quantity="0.001", order_type="SHORT")
+assert resp.result is True
 ```
 
 ## Rate Limits
 
 The Mudrex API enforces rate limits (2 req/s, 50/min, 1000/hr, 10000/day). This SDK does **not** throttle requests — it fires them immediately. If you exceed the limit, the API returns an error which is raised as `MudrexAPIError`. You are responsible for pacing your requests.
+
+## Troubleshooting
+
+### Precision for quantities and prices
+
+Numeric parameters accept `str`, `int`, or `float`; the SDK does not convert them. The API uses strings for precision. **Pass strings** for quantity, leverage, prices, amount, and margin (e.g. `quantity="0.001"`, `leverage="10"`) to avoid float serialization issues.
+
+### "Order value less than minimum required value" (400)
+
+Each contract has a minimum notional (order value). Use `get_future(symbol)` to read the contract’s `min_order_value` (or equivalent) and ensure `quantity * price` meets it. Increase quantity or use a limit price that satisfies the minimum.
+
+### Rate limit (429) and backoff
+
+When you hit a rate limit, the API returns 429 and the SDK raises `MudrexAPIError` with message "API rate limit exceeded". The SDK does not retry or throttle. To avoid repeated 429s:
+
+- Stay under **2 requests per second** when possible.
+- On 429, catch the exception, wait a few seconds (or use a `Retry-After` header if the API sends one), then retry.
+- For bulk operations, add a small delay between calls (e.g. `time.sleep(0.5)`).
+
+### `id` vs `order_id` / `position_id`
+
+- **`place_order`** returns a single object with **`order_id`**.
+- **`get_orders()`** and **`get_order_history()`** return a **list** of orders; each item has **`id`** (not `order_id`).
+- **`get_positions()`** returns a list of positions; each item has **`id`** (not `position_id`).
+
+Use the same id for follow-up calls:
+
+```python
+resp = client.place_order(...)
+oid = resp.order_id
+client.cancel_order(oid)
+
+orders = client.get_orders()
+for o in orders:
+    client.cancel_order(o.id)   # use .id on list items
+
+positions = client.get_positions()
+for p in positions:
+    client.close_position(p.id)  # use .id on list items
+```
+
+So: **single-object responses** use `order_id` / similar; **list responses** use `id`. Use `order.id` and `position.id` when iterating.
 
 ## License
 

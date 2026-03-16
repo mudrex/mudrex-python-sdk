@@ -1,7 +1,6 @@
 import json
 import logging
 import os
-from decimal import Decimal
 
 import requests
 
@@ -93,17 +92,10 @@ class _HTTPClient:
 
     @staticmethod
     def _prepare_body(body):
-        """Remove ``None`` values and convert ``Decimal`` to ``str``."""
+        """Remove ``None`` values from the body. No type conversion — client is responsible for correct types."""
         if not body:
             return None
-        prepared = {}
-        for k, v in body.items():
-            if v is None:
-                continue
-            if isinstance(v, Decimal):
-                prepared[k] = str(v)
-            else:
-                prepared[k] = v
+        prepared = {k: v for k, v in body.items() if v is not None}
         return prepared or None
 
     # ── request / response ──────────────────────────────────────────────
@@ -148,24 +140,68 @@ class _HTTPClient:
         return self._handle_response(response)
 
     @staticmethod
+    def _parse_error_payload(data, status_code):
+        """Extract message and code from API error payload.
+
+        Handles both top-level ``errors`` and double-encoded ``message``
+        (e.g. message is a JSON string containing errors).
+        """
+        errors = data.get("errors") if isinstance(data, dict) else None
+        if errors and isinstance(errors, list) and len(errors) > 0:
+            first = errors[0]
+            if isinstance(first, dict):
+                return (
+                    first.get("text", "Unknown error"),
+                    first.get("code", status_code),
+                )
+        msg_raw = data.get("message") if isinstance(data, dict) else None
+        if isinstance(msg_raw, str) and msg_raw.strip():
+            try:
+                nested = json.loads(msg_raw)
+                return _HTTPClient._parse_error_payload(nested, status_code)
+            except (json.JSONDecodeError, TypeError):
+                return (msg_raw.strip(), status_code)
+        return (f"Request failed with status {status_code}", status_code)
+
+    @staticmethod
     def _handle_response(response):
-        try:
-            data = response.json()
-        except (ValueError, json.JSONDecodeError):
+        raw_text = (response.text or "").strip()
+        status = response.status_code
+
+        # Empty body: avoid json(); 2xx is success (e.g. 204 No Content), else error
+        if not raw_text:
+            if 200 <= status < 300:
+                return None
+            if status == 429:
+                raise MudrexAPIError(
+                    message="API rate limit exceeded",
+                    code=429,
+                    response=response,
+                )
             raise MudrexAPIError(
-                message=f"Invalid JSON response: {response.text[:200]}",
-                code=response.status_code,
+                message=f"Empty response body (HTTP {status})",
+                code=status,
                 response=response,
             )
 
-        if response.status_code >= 400 or not data.get("success", False):
-            errors = data.get("errors", [])
-            if errors:
-                message = errors[0].get("text", "Unknown error")
-                code = errors[0].get("code", response.status_code)
-            else:
-                message = f"Request failed with status {response.status_code}"
-                code = response.status_code
+        try:
+            data = response.json()
+        except (ValueError, json.JSONDecodeError):
+            # Body is not valid JSON; for 429 we still want a clear message
+            if status == 429:
+                raise MudrexAPIError(
+                    message="API rate limit exceeded",
+                    code=429,
+                    response=response,
+                )
+            raise MudrexAPIError(
+                message=f"Invalid JSON response: {raw_text[:200]}",
+                code=status,
+                response=response,
+            )
+
+        if status >= 400 or not data.get("success", False):
+            message, code = _HTTPClient._parse_error_payload(data, status)
             raise MudrexAPIError(
                 message=message, code=code, response=response
             )
@@ -178,7 +214,7 @@ class _HTTPClient:
                 MudrexResponse(item) if isinstance(item, dict) else item
                 for item in result
             ]
-        return result
+        return MudrexResponse({"result": result})
 
     # ── convenience verbs ───────────────────────────────────────────────
 

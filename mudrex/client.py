@@ -13,12 +13,15 @@ class TradeClient(_HTTPClient):
     argument wherever an asset identifier is needed.  For the rare case of
     using a raw asset UUID, pass ``asset_id=`` instead.
 
+    Numeric parameters (quantity, leverage, prices, amount, margin, etc.) accept
+    ``str``, ``int``, or ``float``. For precision, pass strings (e.g. ``"0.001"``,
+    ``"10"``) — the API uses string values for numerics; the SDK does not convert.
+
     Args:
         api_secret: Your Mudrex API secret.
             Falls back to the ``MUDREX_API_SECRET`` environment variable.
-        trade_currency: Trade currency locked for the lifetime of this client
-            (default ``"USDT"``).  To trade in a different currency, create a
-            new ``TradeClient`` instance with the desired currency.
+        trade_currency: Trade currency for this client. Only ``"USDT"`` is
+            supported; default is ``"USDT"``.
         timeout: Request timeout in seconds (default ``10``).
         max_retries: Retries on transient network errors (default ``3``).
         log_requests: Emit debug logs for every request/response (default ``False``).
@@ -30,7 +33,7 @@ class TradeClient(_HTTPClient):
         client = TradeClient(api_secret="your_secret")
         client.place_order(
             "BTCUSDT",
-            leverage=10,
+            leverage="10",   # use string for precision
             quantity="0.001",
             order_type="LONG",
             trigger_type="MARKET",
@@ -52,7 +55,20 @@ class TradeClient(_HTTPClient):
             max_retries=max_retries,
             log_requests=log_requests,
         )
+        if trade_currency != "USDT":
+            raise ValueError(
+                "Only USDT is supported as trade currency. Use trade_currency='USDT' (default)."
+            )
         self._trade_currency = trade_currency
+        self._ping()
+
+    def ping(self):
+        """Verify connectivity and authentication by calling the futures ping endpoint.
+
+        Raises ``MudrexAPIError`` on bad credentials (401) and
+        ``MudrexRequestError`` on network failure. Call this anytime to test
+        that the API is reachable and the secret is valid.
+        """
         self._ping()
 
     # ── internal helpers ────────────────────────────────────────────────
@@ -519,8 +535,7 @@ class TradeClient(_HTTPClient):
         Args:
             from_wallet: Source wallet — ``"SPOT"``, ``"FUTURES"``, or ``"HEDGE"``.
             to_wallet: Destination wallet — ``"SPOT"``, ``"FUTURES"``, or ``"HEDGE"``.
-            amount: Transfer amount. Use a string for exact precision
-                (e.g. ``"10.5"`` instead of ``10.5``).
+            amount: Transfer amount. Use a string for precision (e.g. ``"10.5"``).
         """
         return self._post(
             "/wallet/futures/transfer",
