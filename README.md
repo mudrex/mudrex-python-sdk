@@ -26,7 +26,7 @@ client = TradeClient(api_secret="your_api_secret")
 # Place a market long order on BTCUSDT
 resp = client.place_order(
     "BTCUSDT",
-    leverage=10,
+    leverage="10",
     quantity="0.001",
     order_type="LONG",
     trigger_type="MARKET",
@@ -136,15 +136,6 @@ client = TradeClient(
 | `get_wallet_funds()` | Get wallet balances |
 | `transfer("SPOT", "FUTURES", "100")` | Transfer between wallets |
 
-## Using Symbols vs UUIDs
-
-By default, all asset-related methods use trading symbols (e.g. `"BTCUSDT"`). If you need to use a raw asset UUID instead, pass `asset_id=`:
-
-```python
-client.get_leverage("BTCUSDT")                     # by symbol (recommended)
-client.get_leverage(asset_id="550e8400-e29b-...")   # by UUID
-```
-
 ## Trade Currency
 
 Only **USDT** is supported as trade currency. The client defaults to `trade_currency="USDT"`, so you can omit it:
@@ -155,23 +146,13 @@ client = TradeClient(api_secret="...")  # uses USDT by default
 client = TradeClient(api_secret="...", trade_currency="USDT")
 ```
 
-## Error Handling
+## Using Symbols vs UUIDs
+
+By default, all asset-related methods use trading symbols (e.g. `"BTCUSDT"`). If you need to use a raw asset UUID instead, pass `asset_id=`:
 
 ```python
-from mudrex import TradeClient, MudrexAPIError, MudrexRequestError
-
-client = TradeClient(api_secret="...")
-
-try:
-    client.place_order("BTCUSDT", leverage="10", quantity="0.001",
-                       order_type="LONG", trigger_type="MARKET")
-except MudrexAPIError as e:
-    print(f"API error [{e.code}]: {e.message}")
-    # Access the raw response if needed:
-    # e.response.status_code, e.response.text
-except MudrexRequestError as e:
-    print(f"Network error: {e.message}")
-    # e.original_error has the underlying requests exception
+client.get_leverage("BTCUSDT")                     # by symbol (recommended)
+client.get_leverage(asset_id="550e8400-e29b-...")   # by UUID
 ```
 
 ## Response Format
@@ -197,10 +178,23 @@ for order in orders:
 
 **Pagination:** List endpoints (e.g. `get_orders`, `get_order_history`, `get_positions`) return the data array as sent by the API. Some endpoints may not include pagination metadata (e.g. `total_count`, `has_more`). When metadata is not available, paginate by using the **`limit`** and **`offset`** parameters yourself (e.g. `get_order_history(limit=20, offset=0)`, then `offset=20` for the next page).
 
+## Error Handling
+
 ```python
-# Methods that return a simple success flag (e.g. close_position_partial) wrap it in .result
-resp = client.close_position_partial(position_id="...", quantity="0.001", order_type="SHORT")
-assert resp.result is True
+from mudrex import TradeClient, MudrexAPIError, MudrexRequestError
+
+client = TradeClient(api_secret="...")
+
+try:
+    client.place_order("BTCUSDT", leverage="10", quantity="0.001",
+                       order_type="LONG", trigger_type="MARKET")
+except MudrexAPIError as e:
+    print(f"API error [{e.code}]: {e.message}")
+    # Access the raw response if needed:
+    # e.response.status_code, e.response.text
+except MudrexRequestError as e:
+    print(f"Network error: {e.message}")
+    # e.original_error has the underlying requests exception
 ```
 
 ## Rate Limits
