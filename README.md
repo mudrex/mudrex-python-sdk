@@ -1,20 +1,18 @@
 # Mudrex Python SDK
 
-Official Python SDK for the [Mudrex Futures Trading API](https://docs.trade.mudrex.com).
+Official Python SDK for the [Mudrex HTTP APIs](https://docs.trade.mudrex.com). It currently supports only the **Trading API** (futures orders, positions, leverage, wallet, etc.) via the `TradeClient`.
 
 ## Installation
+
+mudrex requires Python 3.9 or higher. The module can be installed manually or via PyPI with pip:
 
 ```bash
 pip install mudrex
 ```
 
-Or install from source:
+## Development
 
-```bash
-git clone https://github.com/mudrex/mudrex-python-sdk.git
-cd mudrex-python-sdk
-pip install .
-```
+mudrex-python-sdk is actively developed, and new Mudrex API changes are reflected in the SDK as they are released. The SDK uses `requests` for HTTP calls. Anyone is welcome to fork the repository and contribute. If you have made substantial improvements, open a pull request and we will review it.
 
 ## Quick Start
 

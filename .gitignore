@@ -1,4 +1,5 @@
 __pycache__/
+mudrex/_version.py
 *.py[cod]
 *$py.class
 *.egg-info/
