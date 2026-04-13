@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=61", "setuptools-scm[toml]>=7"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mudrex-sdk"
+description = "Official Python SDK for Mudrex Futures Trading API"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.9"
+dynamic = ["version"]
+authors = [
+    { name = "Mudrex", email = "help@mudrex.com" }
+]
+keywords = ["mudrex", "api", "sdk", "futures", "trading", "crypto"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+]
+dependencies = [
+    "requests>=2.28.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/mudrex/mudrex-python-sdk"
+Repository = "https://github.com/mudrex/mudrex-python-sdk"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["mudrex*"]
+
+[tool.setuptools_scm]
+write_to = "mudrex/_version.py"
