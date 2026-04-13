@@ -3,6 +3,7 @@ import logging
 import os
 
 import requests
+from requests.exceptions import ConnectionError, Timeout
 
 from ._exceptions import MudrexAPIError, MudrexRequestError
 from ._types import MudrexResponse
@@ -56,10 +57,7 @@ class _HTTPClient:
         url = f"{BASE_URL}/fapi/v1/futures/ping"
         try:
             response = self._session.get(url, timeout=self._timeout)
-        except (
-            requests.exceptions.ConnectionError,
-            requests.exceptions.Timeout,
-        ) as e:
+        except (ConnectionError, Timeout) as e:
             raise MudrexRequestError(
                 f"Cannot reach Mudrex API: {e}", original_error=e
             )
@@ -124,10 +122,7 @@ class _HTTPClient:
                     timeout=self._timeout,
                 )
                 break
-            except (
-                requests.exceptions.ConnectionError,
-                requests.exceptions.Timeout,
-            ) as e:
+            except (ConnectionError, Timeout) as e:
                 retries_left -= 1
                 if retries_left < 0:
                     raise MudrexRequestError(str(e), original_error=e)

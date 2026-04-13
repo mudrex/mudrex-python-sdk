@@ -18,7 +18,7 @@ class TradeClient(_HTTPClient):
     ``"10"``) — the API uses string values for numerics; the SDK does not convert.
 
     Args:
-        api_secret: Your Mudrex API secret.
+        api_secret: Your Mudrex API secret.             
             Falls back to the ``MUDREX_API_SECRET`` environment variable.
         trade_currency: Trade currency for this client. Only ``"USDT"`` is
             supported; default is ``"USDT"``.

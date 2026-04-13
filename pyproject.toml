@@ -3,14 +3,14 @@ requires = ["setuptools>=61", "setuptools-scm[toml]>=7"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "mudrex"
+name = "mudrex-sdk"
 description = "Official Python SDK for Mudrex Futures Trading API"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.9"
 dynamic = ["version"]
 authors = [
-    { name = "Mudrex", email = "support@mudrex.com" }
+    { name = "Mudrex", email = "help@mudrex.com" }
 ]
 keywords = ["mudrex", "api", "sdk", "futures", "trading", "crypto"]
 classifiers = [

@@ -1,6 +1,13 @@
 class MudrexError(Exception):
     """Base exception for the Mudrex SDK."""
 
+    def __init__(self, message):
+        self.message = message
+        super().__init__(message)
+
+    def __str__(self):
+        return str(self.message)
+
 
 class MudrexAPIError(MudrexError):
     """Raised when the Mudrex API returns an error response.
@@ -12,15 +19,14 @@ class MudrexAPIError(MudrexError):
     """
 
     def __init__(self, message, code=None, response=None):
-        self.message = message
+        super().__init__(message)
         self.code = code
         self.response = response
-        super().__init__(self.message)
 
     def __str__(self):
         if self.code:
             return f"[{self.code}] {self.message}"
-        return self.message
+        return super().__str__()
 
 
 class MudrexRequestError(MudrexError):
@@ -32,6 +38,5 @@ class MudrexRequestError(MudrexError):
     """
 
     def __init__(self, message, original_error=None):
-        self.message = message
+        super().__init__(message)
         self.original_error = original_error
-        super().__init__(self.message)
