@@ -4,11 +4,13 @@ Official Python SDK for the [Mudrex HTTP APIs](https://docs.trade.mudrex.com). I
 
 ## Installation
 
-mudrex requires Python 3.9 or higher. The module can be installed manually or via PyPI with pip:
+**mudrex-sdk** requires Python 3.9 or higher. Install from PyPI with pip:
 
 ```bash
-pip install mudrex
+pip install mudrex-sdk
 ```
+
+Import the `mudrex` package in your code (the PyPI distribution name and the Python module name differ).
 
 ## Development
 
