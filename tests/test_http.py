@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 
 import requests
 
+from mudrex import __version__ as package_version
 from mudrex._exceptions import MudrexAPIError, MudrexRequestError
 from mudrex._http import _HTTPClient
 from mudrex._types import MudrexResponse
@@ -27,6 +28,10 @@ class TestHTTPClientInit(unittest.TestCase):
         self.assertEqual(client._api_secret, "test_secret")
         self.assertEqual(
             client._session.headers["X-Authentication"], "test_secret"
+        )
+        self.assertEqual(
+            client._session.headers["X-Mudrex-SDK-Version"],
+            package_version,
         )
 
     @patch.dict(os.environ, {"MUDREX_API_SECRET": "env_secret"})

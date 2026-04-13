@@ -8,6 +8,11 @@ from requests.exceptions import ConnectionError, Timeout
 from ._exceptions import MudrexAPIError, MudrexRequestError
 from ._types import MudrexResponse
 
+try:
+    from ._version import __version__ as _SDK_VERSION
+except ImportError:
+    _SDK_VERSION = "0.0.0.dev0"
+
 BASE_URL = "https://trade.mudrex.com"
 DEFAULT_TIMEOUT = 10
 
@@ -45,6 +50,7 @@ class _HTTPClient:
             {
                 "X-Authentication": self._api_secret,
                 "Accept": "application/json",
+                "X-Mudrex-SDK-Version": _SDK_VERSION,
             }
         )
 
