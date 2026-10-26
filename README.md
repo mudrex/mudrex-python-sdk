@@ -23,10 +23,12 @@ from mudrex import TradeClient
 
 client = TradeClient(api_secret="your_api_secret")
 
+# Leverage is set per asset before placing (it is not part of place_order)
+client.set_leverage("BTCUSDT", leverage="10")
+
 # Place a market long order on BTCUSDT
 resp = client.place_order(
     "BTCUSDT",
-    leverage="10",
     quantity="0.001",
     order_type="LONG",
     trigger_type="MARKET",
@@ -66,9 +68,9 @@ client = TradeClient()  # picks up MUDREX_API_SECRET automatically
 ```python
 client = TradeClient(
     api_secret="...",
-    trade_currency="USDT",  # only USDT supported; this is the default
+    trade_currency="USDT",  # "USDT" (default) or "INR"
     timeout=10,              # request timeout in seconds
-    max_retries=3,           # retries on network errors only
+    max_retries=3,           # retries on network errors; POSTs only when the request never left
     log_requests=True,       # enable debug logging
 )
 ```
@@ -102,12 +104,14 @@ client = TradeClient(
 
 | Method | Description |
 |---|---|
-| `place_order("BTCUSDT", leverage="10", quantity="0.001", order_type="LONG", trigger_type="MARKET")` | Place a new order |
+| `place_order("BTCUSDT", quantity="0.001", order_type="LONG", trigger_type="MARKET", client_order_id=None)` | Place a new order (`POST /fapi/v2/futures/order`). Set leverage first with `set_leverage` |
 | `get_orders(limit=20)` | Get open orders |
-| `get_order(order_id)` | Get a single order |
+| `get_order_detail(order_id=None, client_order_id=None)` | Get a single order by UUID and/or client order id |
+| `get_order(order_id)` | Deprecated. Use `get_order_detail` |
+| `get_execution_report(order_id)` | Per-fill execution report for an order |
 | `get_order_history(limit=20)` | Get order history |
-| `amend_order(order_id, order_price="50000", stoploss_order_id="...", stoploss_price="95000")` | Amend a limit order |
-| `cancel_order(order_id)` | Cancel an open order |
+| `amend_order(order_id, order_price="50000", quantity="0.002")` | Amend a limit order (docs require both `order_price` and `quantity`) |
+| `cancel_order(order_id)` / `cancel_order(client_order_id="...")` | Cancel an open order by UUID or client order id |
 
 ### Positions
 
@@ -115,11 +119,11 @@ client = TradeClient(
 |---|---|
 | `get_positions(limit=20)` | Get open positions |
 | `get_position_history(limit=20)` | Get position history |
-| `close_position(position_id)` | Close entire position |
-| `close_position_partial(position_id, quantity="0.001", order_type="SHORT")` | Partially close |
+| `close_position(position_id)` | Close entire position; returns `order_id` (close order), `position_id`, `status` (`"CREATED"`: the close is asynchronous, so confirm with `get_order_detail`) and `message` |
+| `close_position_partial(position_id, quantity="0.001", order_type="MARKET", client_order_id=None)` | Partially close; returns `order_id`, `position_id`, `quantity` |
 | `reverse_position(position_id)` | Reverse a position |
-| `place_risk_order(position_id, is_stoploss=True, stoploss_price="95000")` | Add SL/TP |
-| `amend_risk_order(position_id, is_stoploss=True, stoploss_order_id="...", stoploss_price="94000")` | Amend SL/TP |
+| `place_risk_order(position_id, is_stoploss=True, stoploss_price="95000", stoploss_client_order_id=None)` | Add SL/TP |
+| `amend_risk_order(position_id, is_stoploss=True, stoploss_order_id="...", stoploss_price="94000", trigger_type=None)` | Amend SL/TP (client id args only locate an existing leg) |
 | `add_margin(position_id, margin="50")` | Add margin |
 | `get_liquidation_price(position_id)` | Get liquidation price |
 
@@ -127,24 +131,42 @@ client = TradeClient(
 
 | Method | Description |
 |---|---|
-| `get_fee_history(limit=10)` | Get trading fee history |
+| `get_fee_history(limit=10)` | Get trading fee history (`order_id` is absent on non-trade rows such as funding; use `.get("order_id")`) |
+| `get_fee(fee_id)` | Get one fee record (`role`, `fills`) by id from fee history |
 
 ### Wallet
 
 | Method | Description |
 |---|---|
-| `get_wallet_funds()` | Get wallet balances |
-| `transfer("SPOT", "FUTURES", "100")` | Transfer between wallets |
+| `get_wallet_funds(currency=None)` | Get spot wallet balances (`"USDT"` or `"INR"`; defaults to the client's `trade_currency`) |
+| `transfer("SPOT", "FUTURES", "100")` | Transfer between wallets (USDT clients only; raises `ValueError` on an INR client) |
+| `get_transactions(limit=None, trade_currency=None, transaction_type=None, status=None, sort_by=None, sort_order=None)` | Futures wallet deposit/withdraw records (known backend issues: `trade_currency` is not currently applied; `status="Processing"` returns no rows) |
 
 ## Trade Currency
 
-Only **USDT** is supported as trade currency. The client defaults to `trade_currency="USDT"`, so you can omit it:
+`USDT` and `INR` are supported. The client defaults to `trade_currency="USDT"`, so you can omit it:
 
 ```python
 client = TradeClient(api_secret="...")  # uses USDT by default
-# or explicitly:
-client = TradeClient(api_secret="...", trade_currency="USDT")
+client = TradeClient(api_secret="...", trade_currency="INR")
 ```
+
+Any other value raises `ValueError` before a request is sent. `get_wallet_funds(currency=...)` defaults to the client's `trade_currency` and can be overridden per call. `transfer()` is USDT-only.
+
+## Client Order IDs
+
+`place_order` accepts an optional `client_order_id` (letters, digits, `-`, `_`; up to 64 characters). Use it to look up or cancel an order without storing the Mudrex UUID:
+
+```python
+client.set_leverage("BTCUSDT", leverage="10")
+client.place_order("BTCUSDT", quantity="0.001", order_type="LONG",
+                   trigger_type="MARKET", client_order_id="my-order-123")
+
+client.get_order_detail(client_order_id="my-order-123")
+client.cancel_order(client_order_id="my-order-123")
+```
+
+An invalid format raises `MudrexAPIError` (400 `invalid order identifier`); reusing an accepted id raises `MudrexAPIError` (409 `client order id already exists`). A place is never resent once it may have reached the API (e.g. after a read timeout); only connect failures are retried. If a response is lost, call `get_order_detail(client_order_id=...)` before placing again. `place_risk_order` takes `stoploss_client_order_id` / `takeprofit_client_order_id`, and `close_position_partial` takes `client_order_id` (applied to the generated close order).
 
 ## Using Symbols vs UUIDs
 
@@ -161,7 +183,10 @@ All methods return a `MudrexResponse` (a dict with attribute access) or a list o
 
 - **Object responses** (e.g. `place_order`, `get_leverage`): one `MudrexResponse` with the API fields.
 - **List responses** (e.g. `get_orders`, `get_positions`, `get_position_history`): a list of `MudrexResponse` objects.
-- **Scalar responses** (e.g. `close_position_partial` when the API returns `{"success": true, "data": true}`): a single `MudrexResponse` with a `result` field holding the value (e.g. `resp.result` is `True`).
+- Scalar responses (e.g. `get_liquidation_price`, where `data` is a price string): the value itself, e.g. `"62888.3"`.
+- Empty responses: when the API returns `data: null` the SDK returns `None`; `get_positions()` returns `[]` when there are no open positions.
+
+Fields added in API v1.0.12: `close_position` returns `order_id` (the close order UUID) and `position_id` (the position UUID). `close_position_partial` returns `order_id`, `position_id` and `quantity`. Order responses, `get_positions()` and `get_position_history()` include `position_id`; position history rows also include `order_id`, and a history row's `id` is the row UUID, not the position UUID. `list_futures()` / `get_future()` include `previous_funding_interval` (Unix epoch seconds of the previous funding time).
 
 ```python
 resp = client.get_leverage("BTCUSDT")
@@ -186,7 +211,7 @@ from mudrex import TradeClient, MudrexAPIError, MudrexRequestError
 client = TradeClient(api_secret="...")
 
 try:
-    client.place_order("BTCUSDT", leverage="10", quantity="0.001",
+    client.place_order("BTCUSDT", quantity="0.001",
                        order_type="LONG", trigger_type="MARKET")
 except MudrexAPIError as e:
     print(f"API error [{e.code}]: {e.message}")
@@ -199,7 +224,15 @@ except MudrexRequestError as e:
 
 ## Rate Limits
 
-The Mudrex API enforces rate limits (2 req/s, 50/min, 1000/hr, 10000/day). This SDK does **not** throttle requests — it fires them immediately. If you exceed the limit, the API returns an error which is raised as `MudrexAPIError`. You are responsible for pacing your requests.
+The Mudrex API enforces tiered rate limits (see [Authentication and Rate Limits](https://docs.trade.mudrex.com/docs/authentication-rate-limits)):
+
+| Tier | Limits |
+|---|---|
+| Default (trading) | 10 req/s, 500/min, 30000/hr |
+| Core trading endpoints | Default limits plus 720000/day |
+| Wallet | 2 req/s, 50/min, 3000/hr |
+
+Limits use fixed clock windows. This SDK does **not** throttle requests. If you exceed a limit, the API returns HTTP 429. When `Retry-After` is 30 seconds or less, the SDK waits that long and retries, up to `max_retries`. Otherwise (longer, missing or invalid) it raises `MudrexAPIError` straight away; `e.retry_after` holds the header in seconds as sent (`None` if absent). You are responsible for pacing your requests.
 
 ## Troubleshooting
 
@@ -213,17 +246,27 @@ Each contract has a minimum notional (order value). Use `get_future(symbol)` to 
 
 ### Rate limit (429) and backoff
 
-When you hit a rate limit, the API returns 429 and the SDK raises `MudrexAPIError` with message "API rate limit exceeded". The SDK does not retry or throttle. To avoid repeated 429s:
+When you hit a rate limit, the API returns 429 and the SDK waits and retries when `Retry-After` is 30 seconds or less (up to `max_retries`). If it is longer, missing or invalid, or retries run out, the SDK raises `MudrexAPIError` with message "API rate limit exceeded". The SDK does not throttle. To avoid repeated 429s:
 
-- Stay under **2 requests per second** when possible.
-- On 429, catch the exception, wait a few seconds (or use a `Retry-After` header if the API sends one), then retry.
-- For bulk operations, add a small delay between calls (e.g. `time.sleep(0.5)`).
+- Stay within the tier limits above; wallet endpoints are much tighter than trading endpoints.
+- If a 429 still reaches you, catch the exception, wait `e.retry_after` seconds (when set), then retry:
+
+```python
+try:
+    client.get_wallet_funds()
+except MudrexAPIError as e:
+    if e.code == 429 and e.retry_after:
+        time.sleep(e.retry_after)
+```
+
+- For bulk operations, add a small delay between calls.
 
 ### `id` vs `order_id` / `position_id`
 
 - **`place_order`** returns a single object with **`order_id`**.
 - **`get_orders()`** and **`get_order_history()`** return a **list** of orders; each item has **`id`** (not `order_id`).
-- **`get_positions()`** returns a list of positions; each item has **`id`** (not `position_id`).
+- **`get_positions()`** returns a list of positions; each item has **`id`** and, as of API v1.0.12, **`position_id`** (same value).
+- **`get_position_history()`** rows: **`id`** is the history-row UUID, not the position UUID. Use the row's **`position_id`** for the position and **`order_id`** for the order.
 
 Use the same id for follow-up calls:
 
@@ -242,6 +285,12 @@ for p in positions:
 ```
 
 So: **single-object responses** use `order_id` / similar; **list responses** use `id`. Use `order.id` and `position.id` when iterating.
+
+## Migrating
+
+0.2.0 is a breaking release. Null and scalar API data is now returned unwrapped (no more `resp.result`), and `place_order` uses the v2 path without `leverage`.
+
+See [CHANGELOG.md](CHANGELOG.md) for changed signatures (old and new forms), including the deprecation of `leverage` on `place_order` (ignored, `FutureWarning`, removed in 0.3.0) and the v1.0.12 close-response shapes.
 
 ## License
 

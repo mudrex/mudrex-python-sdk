@@ -1,9 +1,11 @@
 import json
 import logging
 import os
+import time
 
 import requests
-from requests.exceptions import ConnectionError, Timeout
+from requests.exceptions import ConnectionError, ConnectTimeout, Timeout
+from urllib3.exceptions import ConnectTimeoutError, NewConnectionError
 
 from ._exceptions import MudrexAPIError, MudrexRequestError
 from ._types import MudrexResponse
@@ -15,6 +17,8 @@ except ImportError:
 
 BASE_URL = "https://trade.mudrex.com"
 DEFAULT_TIMEOUT = 10
+# A 429 is retried only when Retry-After is at or below this many seconds.
+MAX_RETRY_AFTER = 30
 
 logger = logging.getLogger("mudrex")
 
@@ -23,8 +27,9 @@ class _HTTPClient:
     """Low-level HTTP transport for the Mudrex FAPI.
 
     Handles authentication headers, request dispatch, response parsing,
-    and network-error retries.  No rate-limit throttling — requests fire
-    immediately; API errors (including rate-limit) are surfaced as exceptions.
+    and retries.  No proactive throttling — requests fire immediately.  A 429
+    is retried after its ``Retry-After`` wait when that is at most
+    ``MAX_RETRY_AFTER`` seconds; other API errors are surfaced as exceptions.
     """
 
     def __init__(
@@ -104,8 +109,8 @@ class _HTTPClient:
 
     # ── request / response ──────────────────────────────────────────────
 
-    def _request(self, method, path, params=None, body=None):
-        url = f"{BASE_URL}/fapi/v1{path}"
+    def _request(self, method, path, params=None, body=None, version="v1"):
+        url = f"{BASE_URL}/fapi/{version}{path}"
         params = self._clean_params(params)
         body = self._prepare_body(body)
 
@@ -127,11 +132,28 @@ class _HTTPClient:
                     headers=headers,
                     timeout=self._timeout,
                 )
-                break
             except (ConnectionError, Timeout) as e:
                 retries_left -= 1
+                # A POST may have reached the exchange before the failure
+                # (e.g. read timeout), so resending could duplicate it. Only
+                # retry it when the request provably never left.
+                if method == "POST" and not self._never_sent(e):
+                    raise MudrexRequestError(str(e), original_error=e)
                 if retries_left < 0:
                     raise MudrexRequestError(str(e), original_error=e)
+                continue
+
+            # 429 means the request was rejected before processing, so any
+            # method (POST included) is safe to resend after the wait.
+            if response.status_code == 429 and retries_left > 0:
+                wait = self._retry_after(response)
+                if wait is not None and wait <= MAX_RETRY_AFTER:
+                    retries_left -= 1
+                    if self._log_requests:
+                        logger.debug("429 on %s %s, retrying in %ss", method, url, wait)
+                    time.sleep(wait)
+                    continue
+            break
 
         if self._log_requests:
             logger.debug(
@@ -139,6 +161,16 @@ class _HTTPClient:
             )
 
         return self._handle_response(response)
+
+    @staticmethod
+    def _never_sent(exc):
+        """True if ``exc`` means the request never reached the server."""
+        if isinstance(exc, ConnectTimeout):
+            return True
+        if isinstance(exc, Timeout):
+            return False
+        reason = getattr(exc.args[0], "reason", None) if exc.args else None
+        return isinstance(reason, (NewConnectionError, ConnectTimeoutError))
 
     @staticmethod
     def _parse_error_payload(data, status_code):
@@ -165,6 +197,27 @@ class _HTTPClient:
         return (f"Request failed with status {status_code}", status_code)
 
     @staticmethod
+    def _retry_after(response):
+        """Return the ``Retry-After`` header as int seconds, or ``None``.
+
+        The value is returned as sent (not capped); ``None`` if the header is
+        missing or not a non-negative integer.
+        """
+        headers = getattr(response, "headers", None)
+        if headers is None:
+            return None
+        try:
+            value = str(headers.get("Retry-After")).strip()
+        except AttributeError:
+            return None
+        if not (value.isascii() and value.isdigit()):
+            return None
+        try:
+            return int(value)
+        except ValueError:  # absurdly long digit string
+            return None
+
+    @staticmethod
     def _handle_response(response):
         raw_text = (response.text or "").strip()
         status = response.status_code
@@ -178,6 +231,7 @@ class _HTTPClient:
                     message="API rate limit exceeded",
                     code=429,
                     response=response,
+                    retry_after=_HTTPClient._retry_after(response),
                 )
             raise MudrexAPIError(
                 message=f"Empty response body (HTTP {status})",
@@ -194,6 +248,7 @@ class _HTTPClient:
                     message="API rate limit exceeded",
                     code=429,
                     response=response,
+                    retry_after=_HTTPClient._retry_after(response),
                 )
             raise MudrexAPIError(
                 message=f"Invalid JSON response: {raw_text[:200]}",
@@ -204,7 +259,12 @@ class _HTTPClient:
         if status >= 400 or not data.get("success", False):
             message, code = _HTTPClient._parse_error_payload(data, status)
             raise MudrexAPIError(
-                message=message, code=code, response=response
+                message=message,
+                code=code,
+                response=response,
+                retry_after=(
+                    _HTTPClient._retry_after(response) if status == 429 else None
+                ),
             )
 
         result = data.get("data")
@@ -215,18 +275,23 @@ class _HTTPClient:
                 MudrexResponse(item) if isinstance(item, dict) else item
                 for item in result
             ]
-        return MudrexResponse({"result": result})
+        # ``None`` (data: null) and scalars (e.g. a price string) are returned as-is.
+        return result
 
     # ── convenience verbs ───────────────────────────────────────────────
 
-    def _get(self, path, params=None):
-        return self._request("GET", path, params=params)
+    def _get(self, path, params=None, version="v1"):
+        return self._request("GET", path, params=params, version=version)
 
-    def _post(self, path, params=None, body=None):
-        return self._request("POST", path, params=params, body=body)
+    def _post(self, path, params=None, body=None, version="v1"):
+        return self._request(
+            "POST", path, params=params, body=body, version=version
+        )
 
-    def _patch(self, path, params=None, body=None):
-        return self._request("PATCH", path, params=params, body=body)
+    def _patch(self, path, params=None, body=None, version="v1"):
+        return self._request(
+            "PATCH", path, params=params, body=body, version=version
+        )
 
-    def _delete(self, path, params=None):
-        return self._request("DELETE", path, params=params)
+    def _delete(self, path, params=None, version="v1"):
+        return self._request("DELETE", path, params=params, version=version)

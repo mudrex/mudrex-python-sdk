@@ -16,12 +16,16 @@ class MudrexAPIError(MudrexError):
         message: Human-readable error description.
         code: Error code from the API (int).
         response: Raw ``requests.Response`` object for inspection.
+        retry_after: Seconds to wait before retrying, from the ``Retry-After``
+            header on HTTP 429 responses. ``None`` when the header is absent
+            or not an integer number of seconds.
     """
 
-    def __init__(self, message, code=None, response=None):
+    def __init__(self, message, code=None, response=None, retry_after=None):
         super().__init__(message)
         self.code = code
         self.response = response
+        self.retry_after = retry_after
 
     def __str__(self):
         if self.code:
